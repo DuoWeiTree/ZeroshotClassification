@@ -1,0 +1,51 @@
+# Byte-compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary files for testing and debugging
+.pytest_cache/
+.coverage
+/htmlcov/
+.nox/
+.tox/
+
+# Virtual environment
+.venv/
+env/
+venv/
+ENV/
+
+# Distribution and packaging
+dist/
+build/
+*.egg-info/
+*.whl
+labeled/
+tables/
+testdata/
+
+
+# C extensions
+*.so
+*.pyd
+
+# Editor and IDE
+.vscode/
+.vscode-test/
+.history/
+
+# OS-related files
+.DS_Store
+.vscode/
+
+# Jupyter Notebook files
+.ipynb_checkpoints
+
+# Miscellaneous
+/tmp/
+.vscode-server/
+
+cache*
+*.html
+output
