@@ -108,7 +108,8 @@ class Counter:
 	def loads(self, s: str):
 		tmp = json.loads(s)
 		self.cnt = tmp["cnt"]
-		self.ns = tmp["ns"]
+		# self.ns = tmp["ns"]
+		self.ns = {int(k): v for k, v in tmp["ns"].items()}
 		self.N_total = tmp["N_total"]
 
 class llmclassifier:

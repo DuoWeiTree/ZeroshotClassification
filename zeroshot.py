@@ -57,9 +57,6 @@ def encode(tags, batch_size=5000, **kwargs) -> np.ndarray:
 
 ####
 
-
-
-
 import faiss
 from sentence_transformers import SentenceTransformer
 

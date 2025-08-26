@@ -46,6 +46,6 @@ testdata/
 /tmp/
 .vscode-server/
 
-cache*
+*cache*
 *.html
 output
