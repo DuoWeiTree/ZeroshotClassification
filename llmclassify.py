@@ -350,7 +350,7 @@ class CategoryExtractor:
 		except Exception as e:
 			print(f"保存失败 {e}")
 
-	def extend(self, tags: list[str], column_name: str, N=100, min_N_total = 1000, T: float=0.02, max_iteration = 10):
+	def extend(self, tags: list[str], column_name: str, N=100, min_N_total = 1000, T: float=0.02, max_iteration = 10, return_sampler = False):
 		"""
 		使用大语言模型对给定的标签进行分类和合并，以扩展现有类别。
 		该方法会迭代地进行分类和合并，直到类别稳定或达到最小样本数。
@@ -449,7 +449,10 @@ class CategoryExtractor:
 			print(f"尝试保存缓存至 {self.cache_path}")
 			self.save_to(self.cache_path)
 
-		return self.get_categories(), final_merge
+		if return_sampler:
+			return self.get_categories(), final_merge, sampler
+		else:
+			return self.get_categories(), final_merge
 	
 	@staticmethod
 	def merge_counter(ct1: Counter, ct2: Counter, merger: llmmerger, samples) -> tuple[Counter, dict]:
@@ -572,7 +575,7 @@ class WSD:
 	def get_gategories(self):
 		return self.extractor.get_categories()
 	
-	def extend(self, df: pd.DataFrame, column_name: str, splitter: Callable[[Any], list[str]], N=200, min_N_total = 1000, T: float=0.03, max_iteration = 10):
+	def extend(self, df: pd.DataFrame, column_name: str, splitter: Callable[[Any], list[str]], N=200, min_N_total = 1000, T: float=0.03, max_iteration = 10, return_sampler = False):
 		"""
 		使用大语言模型对给定的标签进行分类和合并，以扩展现有类别。
 		该方法会迭代地进行分类和合并，直到类别稳定或达到最小样本数。
@@ -593,7 +596,7 @@ class WSD:
 			tags.extend(splitter(seq))
 		tags = np.array(tags)
 		not_empty = (tags != "")
-		return self.extractor.extend(tags[not_empty].tolist(), column_name, N, min_N_total, T, max_iteration)
+		return self.extractor.extend(tags[not_empty].tolist(), column_name, N, min_N_total, T, max_iteration, return_sampler)
 	
 	def classify(
 		self, 

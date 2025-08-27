@@ -49,3 +49,8 @@ testdata/
 *cache*
 *.html
 output
+
+classify_estimate.py
+zeroshot_estimate.py
+download.py
+prepare_color.py
