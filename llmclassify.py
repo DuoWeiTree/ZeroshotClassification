@@ -4,8 +4,13 @@ import json
 from pydantic import BaseModel, Field, ValidationError
 from typing import List, Dict
 import time
-import os
 import copy
+import local_embedding
+from typing import Callable, Iterable
+import pandas as pd
+import zeroshot
+import numpy as np
+
 
 class Sampler:
 	"""
@@ -286,89 +291,6 @@ Output Schema:
 		# 2. 解析和验证
 		return self.MergeOutput.model_validate_json(cleaned_text)
 
-def good_turing(tags: list[str], column_name: str, N=100, min_N_total = 1000, T: float=0.01):
-	# 构建system_prompt
-
-	sampler = Sampler(tags)
-
-	N_total = 0
-	r0 = 1
-	counter = Counter()
-
-	"all_categories"
-	"classification_results"
-	"merged_categories"
-
-	classifier = llmclassifier(column_name=column_name)
-	merger = llmmerger(column_name=column_name)
-
-
-	while r0 > T or N_total < min_N_total:
-		try:
-			samples = sampler.get_samples(n=N)
-			N_total += N
-		except:
-			break
-
-		success = False
-		while not success:
-			try:
-				existing_categories = [k for k, v in counter.cnt.items()]
-				classify_output = classifier.request(existing_categories, samples)
-
-				print("分类成功")
-				print(f"All Categories:\n{classify_output.all_categories}\n")
-				print(f"Classification results:\n{classify_output.classification_results}\n")
-				print("------------------------------------------------------")
-
-				for result in classify_output.classification_results:
-					counter.add(result)
-				success = True
-			except ValidationError as e:
-				print("JSON 验证失败！")
-				print(e.json()) # 打印详细的错误信息，便于调试
-			except json.JSONDecodeError as e:
-				print("JSON 解析失败！")
-				print(e)
-			if not success:
-				time.sleep(2)
-		
-		success = False
-		while not success:
-			try:
-				all_categories = [k for k, v in counter.cnt.items()]
-				merge_output = merger.request(all_categories, samples)
-
-				print("合并成功")
-				print(f"Merge Categories:\n{json.dumps(merge_output.merged_categories, indent=2, ensure_ascii=False)}\n")
-				print("------------------------------------------------------")
-
-				for old, new in merge_output.merged_categories.items():
-					counter.merge(old, new)
-				success = True
-			except ValidationError as e:
-				print("JSON 验证失败！")
-				print(e.json()) # 打印详细的错误信息，便于调试
-			except json.JSONDecodeError as e:
-				print("JSON 解析失败！")
-				print(e)
-			if not success:
-				time.sleep(2)
-
-		if 1 in counter.ns:
-			r0 = counter.ns[1] / N_total
-			print(f"------------------->>> r0 = {r0} <<<-------------------")
-
-		
-	
-	if r0 > T:
-		print(f"样本数不足, r0={r0} > T={T}")
-	else:
-		print(f"分类完成, r0={r0} < T={T}, cnt:\n{json.dumps(counter.cnt,indent=4, ensure_ascii=False)}")
-
-	existing_categories = [k for k, v in counter.cnt.items()]
-	return existing_categories
-
 class CategoryExtractor:
 	def __init__(self, cache_path:str = None):
 		"""
@@ -428,7 +350,7 @@ class CategoryExtractor:
 		except Exception as e:
 			print(f"保存失败 {e}")
 
-	def extend(self, tags: list[str], column_name: str, N=100, min_N_total = 1000, T: float=0.01):
+	def extend(self, tags: list[str], column_name: str, N=100, min_N_total = 1000, T: float=0.02, max_iteration = 10):
 		"""
 		使用大语言模型对给定的标签进行分类和合并，以扩展现有类别。
 		该方法会迭代地进行分类和合并，直到类别稳定或达到最小样本数。
@@ -453,7 +375,8 @@ class CategoryExtractor:
 		classifier = llmclassifier(column_name=column_name)
 		merger = llmmerger(column_name=column_name)
 
-		while counter.r0() > T or counter.N_total < min_N_total:
+		iteration = 0
+		while (counter.r0() > T or counter.N_total < min_N_total) and iteration < max_iteration:
 			try:
 				samples = sampler.get_samples(n=N)
 			except:
@@ -503,8 +426,8 @@ class CategoryExtractor:
 					print(e)
 				if not success:
 					time.sleep(2)
-
-			print(f"------------------->>> r0 = {counter.r0()} <<<-------------------")
+			iteration += 1
+			print(f"------------------->>> Iteration {iteration}, r0 = {counter.r0()} <<<-------------------")
 
 		if counter.r0() > T:
 			print(f"样本数不足, r0 = {counter.r0()} > T = {T}")
@@ -572,3 +495,171 @@ class CategoryExtractor:
 				time.sleep(2)
 
 		return ct1, merge_output.merged_categories
+
+def mapping_tags(
+		sequences: list[str],
+		map: dict[str, dict],
+		splitter: Callable[[Any], list[str]]
+	) -> tuple[list[str], list[str], list[str]]:
+	"""
+	根据映射字典，将输入序列中的标签转换为对应的标签名、ID 和分数字符串。
+
+	处理流程：
+	1. 遍历输入的字符串序列，每个序列可包含多个标签。
+	2. 使用 `splitter` 函数将序列拆分为单个标签。
+	3. 对于每个标签，在映射字典中查找对应信息：
+	- 若找到，提取其 "label"、"label_id" 和 "score"。
+	- 若未找到，则使用默认值：label="None"，label_id=-1，score=0。
+	4. 将同一序列的多个结果拼接为逗号分隔的字符串。
+	5. 最终返回三个列表，分别对应所有序列的标签、ID 和分数。
+
+	参数:
+	- sequences (list[str]): 输入字符串序列，每个元素可能包含一个或多个标签。
+	- map (dict[str, dict]): 映射字典，键为标签字符串，值为包含以下键的字典：
+		- "label" (str): 标签名称。
+		- "label_id" (int): 标签 ID。
+		- "score" (float): 匹配得分。
+	- splitter (Callable[[Any], list[str]]): 将序列拆分为标签列表的函数。
+
+	返回:
+	- tuple[list[str], list[str], list[str]]:
+	三个与输入序列等长的列表：
+		1. 标签名列表（每个元素是逗号分隔的字符串）。
+		2. 标签 ID 列表（字符串形式，逗号分隔）。
+		3. 分数列表（字符串形式，逗号分隔）。
+
+	示例:
+	>>> sequences = ["tagA,tagB", "tagC"]
+	>>> mapping = {
+	...     "tagA": {"label": "labelA", "label_id": 1, "score": 0.9},
+	...     "tagB": {"label": "labelB", "label_id": 2, "score": 0.8},
+	...     "tagD": {"label": "labelD", "label_id": 4, "score": 0.7},
+	... }
+	>>> def splitter(x: str) -> list[str]:
+	...     return x.split(",")
+	>>> labels, label_ids, scores = mapping_tags(sequences, mapping, splitter)
+	>>> labels
+	['labelA,labelB', 'None']
+	>>> label_ids
+	['1,2', '-1']
+	>>> scores
+	['0.9,0.8', '0']
+	"""
+	labels, label_ids, scores = [], [], []
+	for seq in sequences:
+		label, label_id, score = [], [], []
+		for single in splitter(seq):
+			if single in map:
+				output = map[single]
+				label.append(output["label"])
+				label_id.append(str(output["label_id"])) # 修复：确保转换为字符串
+				score.append(str(output["score"])) # 修复：确保转换为字符串
+			else:
+				label.append("None")
+				label_id.append("-1")
+				score.append("0")
+		labels.append(",".join(label))
+		label_ids.append(",".join(label_id))
+		scores.append(",".join(score))
+	
+	return labels, label_ids, scores
+
+class WSD:
+	def __init__(self, cache_path:str = None):
+		self.extractor = CategoryExtractor(cache_path=cache_path)
+		print(f"当前类别列表: {self.get_gategories()}")
+
+	def get_gategories(self):
+		return self.extractor.get_categories()
+	
+	def extend(self, df: pd.DataFrame, column_name: str, splitter: Callable[[Any], list[str]], N=200, min_N_total = 1000, T: float=0.03, max_iteration = 10):
+		"""
+		使用大语言模型对给定的标签进行分类和合并，以扩展现有类别。
+		该方法会迭代地进行分类和合并，直到类别稳定或达到最小样本数。
+
+		Args:
+			tags (list[str]): 待处理的标签列表。
+			column_name (str): 用于 LLM 模型的列名。
+			N (int): 每次分类的样本数。默认为 100。
+			min_N_total (int): 最小处理的样本总数。默认为 1000。
+			T (float): 稳定性阈值。默认为 0.01。
+
+		Returns:
+			tuple[list[str], dict]: 一个元组，包含最终的类别列表和最终的合并映射字典。
+		"""
+		tags = []
+		sequences = df[column_name]
+		for seq in sequences:
+			tags.extend(splitter(seq))
+		tags = np.array(tags)
+		not_empty = (tags != "")
+		return self.extractor.extend(tags[not_empty].tolist(), column_name, N, min_N_total, T, max_iteration)
+	
+	def classify(
+		self, 
+		df: pd.DataFrame, 
+		column_name: str, 
+		eid: str, 
+		splitter: Callable[[Any], list[str]], 
+		encoder: Callable[[list[str]], Iterable[Iterable[float]]] = None
+	) -> pd.DataFrame:
+		"""
+		对 DataFrame 中指定列的文本序列进行零样本分类，并返回带标签信息的 DataFrame。
+
+		处理流程：
+		1. 遍历 `df[column_name]` 中的每个序列，使用 `splitter` 拆分为单个标签。
+		2. 若未提供 `encoder`，使用默认本地嵌入模型 `local_embedding.encode`。
+		3. 调用 `zeroshot.embedding_zeroshot_ann` 将标签序列编码并进行零样本分类。
+		4. 使用 `mapping_tags` 将分类结果映射为标签名称、标签 ID 和分数字符串。
+		5. 将原始序列、对应的标签、标签 ID 和分数组合成新的 DataFrame 并返回。
+
+		参数:
+		- df (pd.DataFrame): 待分类的 DataFrame。
+		- column_name (str): DataFrame 中存放文本序列的列名。
+		- eid (str): DataFrame 中用于标识行的 ID 列名。
+		- splitter (Callable[[Any], list[str]]): 将文本序列拆分为标签列表的函数。
+		- encoder (Callable[[list[str]], Iterable[Iterable[float]]], 可选): 将标签列表编码为向量的函数。默认使用 `local_embedding.encode`。
+
+		返回:
+		- pd.DataFrame: 新的 DataFrame，包含以下列：
+			- 原始文本列（column_name）
+			- ID 列（eid）
+			- "label"：预测标签名称（逗号分隔）
+			- "label_id"：标签 ID（逗号分隔字符串）
+			- "score"：匹配分数（逗号分隔字符串）
+
+		示例:
+		>>> df = pd.DataFrame({
+		...     "text": ["tagA,tagB", "tagC"],
+		...     "id": [1, 2]
+		... })
+		>>> classify(df, column_name="text", eid="id", splitter=lambda x: x.split(","))
+		text  id        label label_id  score
+		0  tagA,tagB   1  labelA,labelB    1,2  0.9,0.8
+		1      tagC   2           None     -1     0
+		"""
+		tags = []
+		sequences = df[column_name]
+		for seq in sequences:
+			tags.extend(splitter(seq))
+		if encoder is None:
+			encoder = local_embedding.encode
+
+		candidate_labels = self.get_gategories()
+
+		tags = np.array(tags)
+		not_empty = (tags != "")
+		classify_map = zeroshot.embedding_zeroshot_ann(encoder=encoder,
+												 sequences_to_classify=tags[not_empty],
+												 candidate_labels=candidate_labels,
+												 )
+
+		result = pd.DataFrame()
+		labels, label_ids, scores = mapping_tags(sequences, classify_map, splitter)
+		result[column_name] = sequences
+		result[eid] = df[eid]
+		result["label"] = labels
+		result["label_id"] = label_ids
+		result["score"] = scores
+		
+		return result
