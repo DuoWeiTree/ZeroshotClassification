@@ -24,7 +24,7 @@ class LLMLite:
 
 	def request(self, user_prompt, verbose=False) -> str:
 		if verbose:
-			print("LLMLite Requesting...")
+			print(f"LLMLite Requesting on {self.model}...")
 		messages = self.messages + [{
 			"role": "user",
 			"content": user_prompt,

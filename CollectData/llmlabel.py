@@ -12,7 +12,6 @@ from sortedcontainers import SortedSet
 import pickle
 from tqdm import tqdm
 
-
 class Sampler:
 	"""
 	一个用于不重复抽样的类。抽样基于样本的位置，确保每个样本只被抽取一次。
@@ -117,7 +116,7 @@ class LLMClassifier:
 		classification_results: Dict[int, str] = Field(..., description="每个待分类文本所属的类别映射，键为输入的索引，值严格引用all_categories中的类名")
 		# merged_categories: List[Dict[str, str]] = Field(..., description="旧类别被合并到新类别的映射，记录语言统一或合并情况")
 
-	def __init__(self, column_name: str):
+	def __init__(self, column_name: str, model_name = "gpt-4o"):
 		input_schema_str = json.dumps(self.UserInput.model_json_schema(), ensure_ascii=False, indent=2)
 		output_schema_str = json.dumps(self.ClassificationOutput.model_json_schema(), ensure_ascii=False, indent=2)
 
@@ -155,7 +154,7 @@ Output Schema:
 """
 
 		import llmagent
-		self.agent = llmagent.LLMLite(system_prompt=system_prompt, model="gemini-2.5-flash")
+		self.agent = llmagent.LLMLite(system_prompt=system_prompt, model=model_name)
 
 	def request(self, existing_categories: list[str], data_to_classify: dict[int, str], verbose=False):
 		user_prompt = {
@@ -204,7 +203,7 @@ class LLMMerger:
 			description="key类被合并到value类，保证最终类名语义唯一、英文统一"
 		)
 
-	def __init__(self, column_name: str):
+	def __init__(self, column_name: str, model_name = "gpt-4o"):
 		input_schema_str = json.dumps(self.UserInput.model_json_schema(), ensure_ascii=False, indent=2)
 		output_schema_str = json.dumps(self.MergeOutput.model_json_schema(), ensure_ascii=False, indent=2)
 
@@ -241,10 +240,8 @@ Output Schema:
 {output_schema_str}
 """
 
-
-
 		import llmagent
-		self.agent = llmagent.LLMLite(system_prompt=system_prompt, model="gemini-2.5-flash")
+		self.agent = llmagent.LLMLite(system_prompt=system_prompt, model=model_name)
 		# agent = llmagent.Gemini(system_prompt=system_prompt, model="gemini-2.5-flash")
 
 	def request(self, categories: list[str], samples: list[str], verbose=False):
@@ -518,7 +515,7 @@ class Dictionary:
 class LLMLabeler:
 	"""LLMLabeler 用于批量文本分类和标签管理，支持缓存和 LLM 调用。"""
 
-	def __init__(self, cache_path: str = None):
+	def __init__(self, cache_path: str = None, model_name = "gpt-4o"):
 		"""
         初始化 LLMLabeler。
 
@@ -526,8 +523,9 @@ class LLMLabeler:
             cache_path (str, optional): 如果提供，初始化时会尝试加载缓存。
         """
 		self.dic  = Dictionary()
+		self.model_name = model_name
+		self.cache_path = cache_path
 		if cache_path is not None:
-			self.cache_path = cache_path
 			print(f"尝试从 {cache_path} 加载缓存")
 			self.load_from(cache_path)
 
@@ -559,13 +557,13 @@ class LLMLabeler:
 		except Exception as e:
 			print(f"无法保存至 {file_path} : {e}")
 
-	def extend(self, df: pd.DataFrame, column_name: str, batch_size: int = 512, verbose = False) -> None:
+	def extend(self, texts: list[str], column_name: str, batch_size: int = 512, verbose = False) -> None:
 		"""
         批量分类 DataFrame 中指定列的文本，并尝试合并标签。
 
         参数:
-            df (pd.DataFrame): 待分类的 DataFrame。
-            column_name (str): 要分类的列名。
+            texts (list[str]): 待处理的文本列表。
+            column_name (str): 要处理的列名 用于LLM提示词。
             batch_size (int, optional): 每次调用 LLM 的文本数量，默认 512。
             verbose (bool, optional): 是否打印详细日志，默认 False。
 
@@ -578,7 +576,7 @@ class LLMLabeler:
             - 更新内部 Dictionary。
             - 如果设置了 cache_path，则自动保存缓存。
         """
-		unique_texts = df[column_name].dropna().unique().tolist()
+		unique_texts = np.unique(np.array(texts)).tolist()
 		print(f"去重后剩余: {len(unique_texts)}")
 
 		existing_map = self.dic.reverse_map()
@@ -587,8 +585,8 @@ class LLMLabeler:
 
 		sampler = Sampler(unique_texts)
 
-		classifier = LLMClassifier(column_name)
-		merger = LLMMerger(column_name)
+		classifier = LLMClassifier(column_name, model_name=self.model_name)
+		merger = LLMMerger(column_name, model_name=self.model_name)
 
 		print(f"开始利用LLM分类")
 		with tqdm(total=len(unique_texts)) as pbar:
@@ -663,18 +661,17 @@ class LLMLabeler:
 		if self.cache_path:
 			self.save_to(self.cache_path)
 
-	def label(self, df: pd.DataFrame, column_name: str) -> list[str]:
+	def label(self, texts: list[str], column_name: str) -> list[str]:
 		"""
         将 DataFrame 中的文本映射为已有分类标签，不调用 LLM。
 
         参数:
-            df (pd.DataFrame): 待映射的 DataFrame。
-            column_name (str): 需要映射的列名。
+            texts (list[str]): 待处理的文本列表。
+            column_name (str): 要处理的列名 用于LLM提示词。
 
         返回:
             list[str]: 文本对应的标签列表，未分类的文本返回空字符串 ""。
         """
-		texts = df[column_name].tolist()
 		print(f"开始将 {len(texts)} 项映射至 {len(self.dic.set)} 类")
 		all_map = self.dic.reverse_map()
 
@@ -682,138 +679,60 @@ class LLMLabeler:
 		print("映射完毕")
 		return results
 
-	def extend_and_label(self, df: pd.DataFrame, column_name: str, batch_size: int = 512, verbose = False):
+	def extend_and_label(self, texts: list[str], column_name: str, batch_size: int = 512, verbose = False):
 		"""
         先批量分类 DataFrame 中的文本，再返回对应标签列表。
 
         参数:
-            df (pd.DataFrame): 待处理的 DataFrame。
-            column_name (str): 要处理的列名。
+            texts (list[str]): 待处理的文本列表。
+            column_name (str): 要处理的列名 用于LLM提示词。
             batch_size (int, optional): 每次调用 LLM 的文本数量，默认 512。
             verbose (bool, optional): 是否打印详细日志，默认 False。
 
         返回:
             list[str]: 文本对应的标签列表。
         """
-		self.extend(df, column_name, batch_size, verbose)
-		return self.label(df, column_name)
+		self.extend(texts, column_name, batch_size, verbose)
+		return self.label(texts, column_name)
 
 if __name__ == "__main__":
 
-	import os
+	import re
+	from itertools import chain
 
-	# 获取当前脚本所在的目录
-	current_dir = os.path.dirname(os.path.abspath(__file__))
+	def spliter_0(text: str):
+		return re.split("[,/&]+", text)
 
-	# 把它设置为工作目录
-	os.chdir(current_dir)
+	def spliter_1(text: str):
+		return text[2:-2].split("','")
+	
 
+	df = pd.read_csv("./tables/202508142031_产品信息.csv")
+	column_name = "尺寸"
+	texts = df[column_name].astype(str)
 
-	sizes = [
-		"常规尺寸",
-		"超小尺寸",
-		"超小号",
-		"X-Large",
-		"X-Small",
-		"超小尺寸",
-		"大号",
-		"Small",
-		"常规尺寸",
-		"尺寸: X-Large",
-		"XX-Large",
-		"尺寸为XX-Large",
-		"小型",
-		"Small",
-		"Large",
-		"Medium Chest (14.25-18.75\")",
-		"常规尺寸",
-		"Medium",
-		"小号",
-		"加大号，胸围20.5 - 23英寸",
-		"L (Chest: 18 - 20.5\")",
-		"中号",
-		"超大号尺寸",
-		"中号，胸围16 - 18英寸",
-		"大号",
-		"超大号",
-		"XS (Chest: 13 - 14.5\")",
-		"XL (Chest: 20.5 - 23\")",
-		"常规尺寸",
-		"X-Large (胸围: 20.5-28\")",
-		"大尺寸",
-		"小型胸围（16~19.25英寸）",
-		"小型尺寸",
-		"常规尺寸",
-		"常规尺寸",
-		"S (Chest: 15 - 18\")",
-		"常规尺寸",
-		"尺寸为XS（胸围：13 - 16英寸）",
-		"超大号",
-		"常规尺寸",
-		"S (Chest: 14.5 - 16\")",
-		"超小号",
-		"XS (胸围: 13 - 14.5 英寸)",
-		"XX-Large",
-		"X-Small",
-		"X-Large",
-		"小号",
-		"X-Large",
-		"中型犬适用尺寸",
-		"S",
-		"XS",
-		"常规尺寸描述",
-		"XS",
-		"L",
-		"适合大型犬",
-		"大号",
-		"超大尺寸",
-		"L",
-		"中号",
-		"XL",
-		"超大尺寸",
-		"尺寸为XS（胸围：13 - 16英寸）",
-		"X-Large",
-		"尺码描述",
-		"超大号",
-		"X-Large(Chest:30-38”)",
-		"大号",
-		"X-Large",
-		"XL(Neck:20-31\",Chest:26-42\")",
-		"常规尺寸",
-		"Large",
-		"适合大型犬",
-		"Medium",
-		"XXS尺码",
-		"XXXS号，适合胸围11-12英寸",
-		"XXXS Size",
-		"尺寸",
-		"L号",
-		"M (Chest: 17 - 21\")",
-		"S (Chest: 15 - 18\")",
-		"L码，胸围20-25英寸",
-		"适用于小型宠物",
-		"中号（胸围：17-21英寸）",
-		"XS (Chest: 13 - 16\" * Fit Cats)",
-		"胸围13-16英寸",
-		"尺寸为XS（胸围13-16英寸）",
-		"常规尺寸",
-		"加大号",
-		"尺寸: M(Neck:16-22\",Chest:22-33\"),35-50 lbs"
-	]
+	# 分割
+	texts_single = list(chain(*[spliter_0(text=t) for t in texts]))
 
-	df = pd.DataFrame()
-	df["sizes"] = sizes
-
+	print(texts_single[:50])
 	# 每个方法都有""""""文档可以看
-	labeler = LLMLabeler("./cache/tmp")
 	
 	"""
 	labeler.extend 增量更新
 	labeler.label 映射标签
 	labeler.extend_and_label 增量更新然后映射标签
 	"""
-	label = labeler.extend_and_label(df, "sizes")
-	# label = labeler.label(df, "sizes")
-	print(label)
+	labeler = LLMLabeler(f"./cache/tmp-{column_name}", model_name="gpt-4o")
+	# labeler = LLMLabeler(model_name="gemini-2.5-flash")
+	label = labeler.extend_and_label(texts_single, column_name, batch_size=400)
+
+	result = pd.DataFrame()
+	result[column_name] = texts_single
+	result["label"] = label
+
+	result.to_csv(f"./labeled/tmp-{column_name}.csv")
+
+
+	
 
 	# ['REGULAR', 'XS', 'XS', 'XL', 'XS', 'XS', 'L', 'S', 'REGULAR', 'XL', 'XXL', 'XXL', 'S', 'S', 'L', 'M', 'REGULAR', 'M', 'S', 'XL', 'L', 'M', 'XL', 'M', 'L', 'XL', 'XS', 'XL', 'REGULAR', 'XL', 'L', 'S', 'S', 'REGULAR', 'REGULAR', 'S', 'REGULAR', 'XS', 'XL', 'REGULAR', 'S', 'XS', 'XS', 'XXL', 'XS', 'XL', 'S', 'XL', 'M', 'S', 'XS', 'REGULAR', 'XS', 'L', 'L', 'L', 'XL', 'L', 'M', 'XL', 'XL', 'XS', 'XL', 'SIZE_REFERENCE', 'XL', 'XL', 'L', 'XL', 'XL', 'REGULAR', 'L', 'L', 'M', 'XXS', 'XXXS', 'XXXS', 'SIZE_REFERENCE', 'L', 'M', 'S', 'L', 'S', 'M', 'XS', 'XS', 'XS', 'REGULAR', 'XL', 'M']
