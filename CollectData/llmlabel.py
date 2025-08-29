@@ -812,5 +812,8 @@ if __name__ == "__main__":
 	labeler.label 映射标签
 	labeler.extend_and_label 增量更新然后映射标签
 	"""
-	label = labeler.label(df, "sizes")
+	label = labeler.extend_and_label(df, "sizes")
+	# label = labeler.label(df, "sizes")
 	print(label)
+
+	# ['REGULAR', 'XS', 'XS', 'XL', 'XS', 'XS', 'L', 'S', 'REGULAR', 'XL', 'XXL', 'XXL', 'S', 'S', 'L', 'M', 'REGULAR', 'M', 'S', 'XL', 'L', 'M', 'XL', 'M', 'L', 'XL', 'XS', 'XL', 'REGULAR', 'XL', 'L', 'S', 'S', 'REGULAR', 'REGULAR', 'S', 'REGULAR', 'XS', 'XL', 'REGULAR', 'S', 'XS', 'XS', 'XXL', 'XS', 'XL', 'S', 'XL', 'M', 'S', 'XS', 'REGULAR', 'XS', 'L', 'L', 'L', 'XL', 'L', 'M', 'XL', 'XL', 'XS', 'XL', 'SIZE_REFERENCE', 'XL', 'XL', 'L', 'XL', 'XL', 'REGULAR', 'L', 'L', 'M', 'XXS', 'XXXS', 'XXXS', 'SIZE_REFERENCE', 'L', 'M', 'S', 'L', 'S', 'M', 'XS', 'XS', 'XS', 'REGULAR', 'XL', 'M']
